@@ -60,6 +60,8 @@ export interface PluginSettings {
   //元数据上传设置
   propertyNeedSets: Array<UploadSet>
   //  [propName: string]: any;
+  maxVideoSize: number;
+  videoPosterFrame: string;
 }
 
 /**
@@ -102,6 +104,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
     { key: "cover", type: ImageSvrProcessMode.none.value, width: "0", height: "0" },
     { key: "images", type: ImageSvrProcessMode.none.value, width: "0", height: "0" },
   ],
+  maxVideoSize: 50,
+  videoPosterFrame: "first",
 }
 
 export class SettingTab extends PluginSettingTab {
@@ -268,6 +272,28 @@ export class SettingTab extends PluginSettingTab {
           })
         )
     }
+
+    new Setting(set)
+      .setName($("最大视频大小 (MB)"))
+      .setDesc($("超过此大小的视频将被跳过并提示错误"))
+      .addText((text) =>
+        text.setValue(this.plugin.settings.maxVideoSize.toString()).onChange(async (value) => {
+          this.plugin.settings.maxVideoSize = Number(value)
+          await this.plugin.saveSettings()
+        })
+      )
+
+    new Setting(set)
+      .setName($("视频海报帧提取"))
+      .setDesc($("选择提取视频第一帧或随机帧作为海报"))
+      .addDropdown((dropdown) => {
+        dropdown.addOption("first", $("第一帧 (0s)"))
+        dropdown.addOption("random", $("随机帧"))
+        dropdown.setValue(this.plugin.settings.videoPosterFrame).onChange(async (value) => {
+          this.plugin.settings.videoPosterFrame = value
+          await this.plugin.saveSettings()
+        })
+      })
 
     new Setting(set)
       .setName($("是否上传后删除原图片"))
