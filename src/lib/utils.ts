@@ -335,7 +335,7 @@ export async function imageDown(url: string, plugin: CustomImageAutoUploader): P
 async function uploadVideoAndPoster(videoBlob: Blob, posterBlob: Blob, file: TFile, postData: UploadSet, plugin: CustomImageAutoUploader): Promise<ImageUploadResult> {
   // 1. Upload Video
   let requestDataVideo = new FormData();
-  requestDataVideo.append("imagefile", videoBlob, file.name);
+  requestDataVideo.append("imagefile", new File([videoBlob], file.name, { type: videoBlob.type }), file.name);
   Object.keys(postData).forEach((v) => requestDataVideo.append(v, postData[v]));
 
   let responseVideo;
@@ -363,7 +363,7 @@ async function uploadVideoAndPoster(videoBlob: Blob, posterBlob: Blob, file: TFi
   // 按照要求，海报走正常的压缩逻辑（如果开启压缩） - 但这里我们直接在主逻辑处理比较好
   // 因此这里的 posterBlob 已经是处理好（压缩或未压缩）的二进制了
   let requestDataPoster = new FormData();
-  requestDataPoster.append("imagefile", posterBlob, file.name + "_poster.png");
+  requestDataPoster.append("imagefile", new File([posterBlob], file.name + "_poster.png", { type: posterBlob.type || "image/png" }), file.name + "_poster.png");
   Object.keys(postData).forEach((v) => requestDataPoster.append(v, postData[v]));
 
   let responsePoster;
@@ -554,7 +554,7 @@ export async function imageUpload(file: TFile, postData: UploadSet | undefined, 
   }
 
   let requestData = new FormData()
-  requestData.append("imagefile", new Blob([compressedBody], { type: `image/${file.extension}` }), file.name)
+  requestData.append("imagefile", new File([compressedBody], file.name, { type: `image/${file.extension}` }), file.name)
 
   Object.keys(postData).forEach((v, i, p) => {
     requestData.append(v, postData[v])

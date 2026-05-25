@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "devcss": "sass --watch src/styles.scss styles.css",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production && cp manifest.json plugin_dist/ && cp styles.css plugin_dist/",
     "ver": "node ./update-version.js"
   },
   "keywords": [],
