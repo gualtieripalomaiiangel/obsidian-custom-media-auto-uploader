@@ -1,6 +1,6 @@
 import { Menu, Plugin, TFile, Notice, debounce } from "obsidian";
 
-import { imageDown, imageUpload, statusCheck, replaceInText, replaceInTextForUpload, replaceInTextForDownload, hasExcludeDomain, autoAddExcludeDomain, metadataCacheHandle, generateRandomString, showTaskNotice, showErrorNotice, getAttachmentUploadPath, setMenu } from "./lib/utils";
+import { imageDown, imageUpload, statusCheck, replaceInText, replaceInTextForUpload, replaceInTextForDownload, replaceInTextForVideoUpload, hasExcludeDomain, autoAddExcludeDomain, metadataCacheHandle, generateRandomString, showTaskNotice, showErrorNotice, getAttachmentUploadPath, setMenu } from "./lib/utils";
 import { SettingTab, PluginSettings, DEFAULT_SETTINGS } from "./setting";
 import { DownTask, UploadTask } from "./lib/interface";
 import { $ } from "./lang/lang";
@@ -20,6 +20,7 @@ export default class CustomImageAutoUploader extends Plugin {
   statusBar: HTMLElement[] = []
   downloadStatus: { current: number; total: number } = { current: 0, total: 0 }
   uploadStatus: { current: number; total: number } = { current: 0, total: 0 }
+  videoSizeErrors: string[] = []
   // 添加状态显示类型变量
   statusType: "download" | "upload" | "all" | "none" = "none"
   fromPluginSet = false
@@ -37,6 +38,7 @@ export default class CustomImageAutoUploader extends Plugin {
     if (reset) {
       this.downloadStatus = { current: 0, total: 0 }
       this.uploadStatus = { current: 0, total: 0 }
+      this.videoSizeErrors = []
     }
 
     // 更新状态栏显示
@@ -301,16 +303,32 @@ export default class CustomImageAutoUploader extends Plugin {
     // 处理上传结果
     for (const { task, result } of uploadResults) {
       if (result.err) {
-        showErrorNotice(result.msg)
+        if (result.isVideoSizeLimit) {
+          this.videoSizeErrors.push(result.msg);
+        } else {
+          showErrorNotice(result.msg)
+        }
       } else if (result.imageUrl) {
         isModify = true
         this.uploadStatus.current++
         statusCheck(this)
 
         const searchStr = this.settings.uploadImageRandomSearch ? `?${generateRandomString(10)}` : ""
-        fileContent = replaceInTextForUpload(fileContent, task.matchText, task.imageAlt, result.imageUrl + searchStr)
+
+        if (result.isVideo && result.posterUrl && result.videoType) {
+          const videoUrlWithSearch = result.imageUrl + searchStr;
+          const posterUrlWithSearch = result.posterUrl + searchStr;
+          fileContent = replaceInTextForVideoUpload(fileContent, task.matchText, videoUrlWithSearch, posterUrlWithSearch, result.videoType);
+        } else {
+          fileContent = replaceInTextForUpload(fileContent, task.matchText, task.imageAlt, result.imageUrl + searchStr)
+        }
         autoAddExcludeDomain(result.imageUrl, this)
       }
+    }
+
+    if (this.videoSizeErrors.length > 0) {
+      showErrorNotice($("有 ${count} 个视频文件大小超过限制:", { count: this.videoSizeErrors.length }) + "\n" + this.videoSizeErrors.join("\n"));
+      this.videoSizeErrors = []; // clear after showing
     }
 
     if (isModify) {
@@ -439,7 +457,11 @@ export default class CustomImageAutoUploader extends Plugin {
     // 处理上传结果
     for (const { task, result } of uploadResults) {
       if (result.err) {
-        showErrorNotice(result.msg)
+        if (result.isVideoSizeLimit) {
+          this.videoSizeErrors.push(result.msg);
+        } else {
+          showErrorNotice(result.msg)
+        }
       } else if (result.imageUrl && task.metadataItem) {
         isModify = true
         this.uploadStatus.current++
@@ -447,9 +469,15 @@ export default class CustomImageAutoUploader extends Plugin {
         const searchStr = this.settings.uploadImageRandomSearch ? `?${generateRandomString(10)}` : ""
         const index = task.metadataItem.value.indexOf(task.matchText)
         if (index !== -1) {
+          // Metadata uploads strictly replace values (not html tags like content uploads)
           task.metadataItem.value[index] = result.imageUrl + searchStr
         }
       }
+    }
+
+    if (this.videoSizeErrors.length > 0) {
+      showErrorNotice($("有 ${count} 个视频文件大小超过限制:", { count: this.videoSizeErrors.length }) + "\n" + this.videoSizeErrors.join("\n"));
+      this.videoSizeErrors = []; // clear after showing
     }
 
     if (isModify) {
@@ -586,13 +614,24 @@ export default class CustomImageAutoUploader extends Plugin {
 
         for (const { task, result } of uploadResults) {
           if (result.err) {
-            showErrorNotice(result.msg)
+            if (result.isVideoSizeLimit) {
+              this.videoSizeErrors.push(result.msg);
+            } else {
+              showErrorNotice(result.msg)
+            }
           } else if (result.imageUrl) {
             isModify = true
             this.uploadStatus.current++
             statusCheck(this)
             const searchStr = this.settings.uploadImageRandomSearch ? `?${generateRandomString(10)}` : ""
-            fileContent = replaceInTextForUpload(fileContent, task.matchText, task.imageAlt, result.imageUrl + searchStr)
+
+            if (result.isVideo && result.posterUrl && result.videoType) {
+              const videoUrlWithSearch = result.imageUrl + searchStr;
+              const posterUrlWithSearch = result.posterUrl + searchStr;
+              fileContent = replaceInTextForVideoUpload(fileContent, task.matchText, videoUrlWithSearch, posterUrlWithSearch, result.videoType);
+            } else {
+              fileContent = replaceInTextForUpload(fileContent, task.matchText, task.imageAlt, result.imageUrl + searchStr)
+            }
             autoAddExcludeDomain(result.imageUrl, this)
           }
         }
@@ -600,6 +639,11 @@ export default class CustomImageAutoUploader extends Plugin {
         if (isModify) {
           await this.app.vault.modify(item.file, fileContent)
         }
+      }
+
+      if (this.videoSizeErrors.length > 0) {
+        showErrorNotice($("有 ${count} 个视频文件大小超过限制:", { count: this.videoSizeErrors.length }) + "\n" + this.videoSizeErrors.join("\n"));
+        this.videoSizeErrors = []; // clear after showing
       }
     } finally {
       setTimeout(() => {

@@ -17,6 +17,12 @@ export const IMAGE_MIME_TYPES: Record<string, string[]> = {
 }
 export const IMAGE_EXTENSIONS = Object.values(IMAGE_MIME_TYPES).flat()
 
+export const VIDEO_MIME_TYPES: Record<string, string[]> = {
+  "video/mp4": ["mp4"],
+  "video/quicktime": ["mov"],
+}
+export const VIDEO_EXTENSIONS = Object.values(VIDEO_MIME_TYPES).flat()
+
 export interface ImageDownResult {
   err: boolean
   msg: string
@@ -29,6 +35,10 @@ export interface ImageUploadResult {
   msg: string
   imageUrl?: string
   apiError?: string
+  isVideo?: boolean
+  posterUrl?: string
+  videoType?: string
+  isVideoSizeLimit?: boolean
 }
 
 /**
@@ -121,6 +131,62 @@ export async function getAttachmentUploadPath(image: string, plugin: CustomImage
 }
 
 /**
+ * 生成视频海报预览图
+ * @param file - 视频文件
+ * @param mode - 提取模式 ("first" 或 "random")
+ * @returns 预览图 Blob
+ */
+export async function generateVideoPoster(file: Blob, mode: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    if (!ctx) {
+      reject(new Error("Cannot get canvas context"));
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+
+    video.addEventListener("loadedmetadata", () => {
+      // 设置提取的时间点
+      if (mode === "random" && video.duration > 0) {
+        // 避开最后0.5秒以免全是黑屏或结束画面
+        const maxTime = Math.max(0, video.duration - 0.5);
+        video.currentTime = Math.random() * maxTime;
+      } else {
+        video.currentTime = 0; // 第一帧
+      }
+    });
+
+    video.addEventListener("seeked", () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      canvas.toBlob((blob) => {
+        URL.revokeObjectURL(url);
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("Failed to generate blob from canvas"));
+        }
+      }, "image/png"); // 默认生成 PNG
+    });
+
+    video.addEventListener("error", (e) => {
+      URL.revokeObjectURL(url);
+      reject(e);
+    });
+
+    // 开始加载
+    video.src = url;
+    video.load();
+  });
+}
+
+/**
  * 替换文本中的内容 (WikiLink format for Uploads)
  * @param content - 原始内容
  * @param search - 要替换的内容
@@ -131,6 +197,20 @@ export async function getAttachmentUploadPath(image: string, plugin: CustomImage
 export function replaceInTextForUpload(content: string, search: string, desc: string, path: string): string {
   const newLink = `![${desc}](${path})`
   return content.split(search).join(newLink)
+}
+
+/**
+ * 替换文本中的内容 (Video Uploads)
+ * @param content - 原始内容
+ * @param search - 要替换的内容
+ * @param videoUrl - 视频 URL
+ * @param posterUrl - 海报 URL
+ * @param videoType - 视频的 MIME 类型
+ * @returns 替换后的 HTML video 标签
+ */
+export function replaceInTextForVideoUpload(content: string, search: string, videoUrl: string, posterUrl: string, videoType: string): string {
+  const newLink = `<video controls poster="${posterUrl}">\n  <source src="${videoUrl}" type="${videoType}">\n</video>`;
+  return content.split(search).join(newLink);
 }
 
 /**
@@ -244,6 +324,85 @@ export async function imageDown(url: string, plugin: CustomImageAutoUploader): P
 }
 
 /**
+ * 上传视频和海报
+ * @param videoBlob - 视频数据
+ * @param posterBlob - 海报数据
+ * @param file - 原文件
+ * @param postData - 上传数据
+ * @param plugin - 插件实例
+ * @returns 视频和海报上传结果
+ */
+async function uploadVideoAndPoster(videoBlob: Blob, posterBlob: Blob, file: TFile, postData: UploadSet, plugin: CustomImageAutoUploader): Promise<ImageUploadResult> {
+  // 1. Upload Video
+  let requestDataVideo = new FormData();
+  requestDataVideo.append("imagefile", videoBlob, file.name);
+  Object.keys(postData).forEach((v) => requestDataVideo.append(v, postData[v]));
+
+  let responseVideo;
+  try {
+    responseVideo = await fetch(plugin.settings.api, {
+      method: "POST",
+      headers: plugin.settings.apiToken == "" ? new Headers() : new Headers({ Authorization: plugin.settings.apiToken }),
+      body: requestDataVideo
+    });
+  } catch (error) {
+    return { err: true, msg: $("视频网络错误,请检查网络是否通畅") };
+  }
+
+  if (responseVideo && !responseVideo.ok) {
+    return { err: true, msg: $("视频网络错误,请检查网络是否通畅") };
+  }
+
+  let resultVideo = await responseVideo.json();
+  if (resultVideo && !resultVideo.status) {
+    const detailsMsg = resultVideo.details && Array.isArray(resultVideo.details) ? resultVideo.details.join("") : "";
+    return { err: true, msg: "API Error:" + resultVideo.message + detailsMsg, apiError: detailsMsg };
+  }
+
+  // 2. Upload Poster
+  // 按照要求，海报走正常的压缩逻辑（如果开启压缩） - 但这里我们直接在主逻辑处理比较好
+  // 因此这里的 posterBlob 已经是处理好（压缩或未压缩）的二进制了
+  let requestDataPoster = new FormData();
+  requestDataPoster.append("imagefile", posterBlob, file.name + "_poster.png");
+  Object.keys(postData).forEach((v) => requestDataPoster.append(v, postData[v]));
+
+  let responsePoster;
+  try {
+    responsePoster = await fetch(plugin.settings.api, {
+      method: "POST",
+      headers: plugin.settings.apiToken == "" ? new Headers() : new Headers({ Authorization: plugin.settings.apiToken }),
+      body: requestDataPoster
+    });
+  } catch (error) {
+    return { err: true, msg: $("海报网络错误,请检查网络是否通畅") };
+  }
+
+  if (responsePoster && !responsePoster.ok) {
+    return { err: true, msg: $("海报网络错误,请检查网络是否通畅") };
+  }
+
+  let resultPoster = await responsePoster.json();
+  if (resultPoster && !resultPoster.status) {
+    const detailsMsg = resultPoster.details && Array.isArray(resultPoster.details) ? resultPoster.details.join("") : "";
+    return { err: true, msg: "API Error:" + resultPoster.message + detailsMsg, apiError: detailsMsg };
+  }
+
+  if (plugin.settings.isDeleteSource && file instanceof TFile) {
+    plugin.app.fileManager.trashFile(file);
+  }
+
+  return {
+    err: false,
+    msg: resultVideo.message,
+    imageUrl: resultVideo.data.imageUrl,
+    isVideo: true,
+    posterUrl: resultPoster.data.imageUrl,
+    videoType: `video/${file.extension}`
+  };
+}
+
+
+/**
  * 上传图片
  * @param path - 图片路径
  * @param postdata - 上传数据
@@ -251,13 +410,90 @@ export async function imageDown(url: string, plugin: CustomImageAutoUploader): P
  * @returns 上传结果
  */
 export async function imageUpload(file: TFile, postData: UploadSet | undefined, plugin: CustomImageAutoUploader): Promise<ImageUploadResult> {
-  if (!IMAGE_EXTENSIONS.includes(file.extension)) {
-    return { err: true, msg: $("上传文件不是允许的图片类型") }
+  const isImage = IMAGE_EXTENSIONS.includes(file.extension.toLowerCase());
+  const isVideo = VIDEO_EXTENSIONS.includes(file.extension.toLowerCase());
+
+  if (!isImage && !isVideo) {
+    return { err: true, msg: $("上传文件不是允许的类型(图片/视频)") }
   }
 
   let body = await plugin.app.vault.readBinary(file)
 
   if (!postData) return { err: true, msg: $("扩展参数为空") }
+
+  // 处理视频
+  if (isVideo) {
+    // 检查大小 (MB 转 Bytes)
+    const maxSize = (plugin.settings.maxVideoSize || 50) * 1024 * 1024;
+    if (body.byteLength > maxSize) {
+      return { err: true, msg: $("视频大小超限: ") + file.name };
+    }
+
+    const videoBlob = new Blob([body], { type: `video/${file.extension}` });
+    let posterBlob;
+
+    try {
+      posterBlob = await generateVideoPoster(videoBlob, plugin.settings.videoPosterFrame || "first");
+    } catch (e) {
+      return { err: true, msg: $("生成视频海报失败: ") + file.name };
+    }
+
+    // 将 posterBlob 进行可能的压缩 (复用图像压缩逻辑)
+    let posterBuffer = await posterBlob.arrayBuffer();
+    if (plugin.settings.isCompress) {
+      try {
+        const img = new Image()
+        const canvas = document.createElement("canvas")
+        const ctx = canvas.getContext("2d")
+        const url = URL.createObjectURL(posterBlob)
+
+        await new Promise((resolve, reject) => {
+          img.onload = () => {
+            const maxWidth = plugin.settings.compressMaxWidth
+            const maxHeight = plugin.settings.compressMaxHeight
+            let width = img.width
+            let height = img.height
+
+            if (width > maxWidth) {
+              height = Math.round((height * maxWidth) / width)
+              width = maxWidth
+            }
+            if (height > maxHeight) {
+              width = Math.round((width * maxHeight) / height)
+              height = maxHeight
+            }
+
+            canvas.width = width
+            canvas.height = height
+            ctx?.drawImage(img, 0, 0, width, height)
+
+            canvas.toBlob(
+              (blob) => {
+                if (blob) {
+                  blob.arrayBuffer().then((buffer) => {
+                    posterBuffer = buffer
+                    resolve(null)
+                  })
+                } else {
+                  reject(new Error("Failed to create blob"));
+                }
+              },
+              "image/png",
+              plugin.settings.compressQuality
+            )
+          }
+          img.onerror = reject;
+          img.src = url
+        })
+        URL.revokeObjectURL(url)
+      } catch (error) {
+        // 压缩失败则使用未压缩版本
+        console.error("Poster compression failed", error);
+      }
+    }
+
+    return await uploadVideoAndPoster(videoBlob, new Blob([posterBuffer], { type: "image/png" }), file, postData, plugin);
+  }
 
   let compressedBody = body
 
